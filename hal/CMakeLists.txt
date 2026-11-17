@@ -1,6 +1,7 @@
 # Starter HAL library: public headers are included as hal/*.h.
 add_library(hal STATIC src/hardware.c)
 target_include_directories(hal PUBLIC include)
+target_link_libraries(hal PUBLIC m)
 if(ENABLE_HARDWARE)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(GPIOD REQUIRED IMPORTED_TARGET libgpiod>=1.4)

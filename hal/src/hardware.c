@@ -2,6 +2,8 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
+#include <time.h>
 
 #ifdef ENABLE_HARDWARE
 #include <fcntl.h>
@@ -26,11 +28,12 @@ typedef struct {
 
 struct Hardware {
     Hardware_config config;
-    bool has_adc, has_gpio, a, b;
+    bool has_adc, has_gpio, drive;
+    double sim_time, sim_voltage, sim_updated;
     unsigned sample_index;
 #ifdef ENABLE_HARDWARE
     int spi_fd;
-    Gpio_pin pins[3];
+    Gpio_pin pins[2];
 #endif
 };
 
@@ -130,6 +133,7 @@ static void releasePin(Gpio_pin *pin)
 }
 #endif
 
+//configure the existing linux spi device for the adc
 static bool openSpi(Hardware *hardware)
 {
     hardware->spi_fd = open(hardware->config.spi_device, O_RDWR | O_CLOEXEC);
@@ -140,9 +144,9 @@ static bool openSpi(Hardware *hardware)
         && ioctl(hardware->spi_fd, SPI_IOC_WR_BITS_PER_WORD, &bits) == 0
         && ioctl(hardware->spi_fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed) == 0;
 }
-static bool readSpi(Hardware *hardware, uint16_t *raw)
+//send a single ended channel command and decode the twelve bit result
+static bool readSpi(Hardware *hardware, unsigned channel, uint16_t *raw)
 {
-    unsigned channel = hardware->config.adc_channel;
     uint8_t tx[SPI_BYTES] = {
         (uint8_t)(0x06 | ((channel & 0x04) >> 2)),
         (uint8_t)((channel & 0x03) << 6), 0
@@ -162,6 +166,16 @@ static bool readSpi(Hardware *hardware, uint16_t *raw)
 }
 #endif
 
+//evolve a fixed physical rc model independently of expected component values
+static void updateModel(Hardware *hardware)
+{
+    double tau = hardware->config.fault == FAULT_RC_FAST ? 0.1
+               : hardware->config.fault == FAULT_RC_SLOW ? 2.0 : 0.5;
+    double target = hardware->drive ? 3.3 : 0.0;
+    hardware->sim_voltage = target + (hardware->sim_voltage - target)
+        * exp(-(hardware->sim_time - hardware->sim_updated) / tau);
+    hardware->sim_updated = hardware->sim_time;
+}
 bool Hardware_open(Hardware **out, const Hardware_config *config,
                    bool need_adc, bool need_gpio)
 {
@@ -175,12 +189,11 @@ bool Hardware_open(Hardware **out, const Hardware_config *config,
     hardware->spi_fd = -1;
     if (!config->simulate) {
         bool ok = !need_adc || openSpi(hardware);
-        //reserve y first; do not drive a/b if the observation line is busy.
-        if (ok && need_gpio) {
-            ok = requestPin(&hardware->pins[2], config->gpio_y, false)
-              && requestPin(&hardware->pins[0], config->gpio_a, true)
-              && requestPin(&hardware->pins[1], config->gpio_b, true);
-        }
+        //reserve the sense input before driving an output in loopback mode
+        if (ok && need_gpio && config->need_loopback)
+            ok = requestPin(&hardware->pins[1], config->gpio_sense, false);
+        if (ok && need_gpio)
+            ok = requestPin(&hardware->pins[0], config->gpio_drive, true);
         if (!ok) {
             int saved_error = errno;
             (void)Hardware_close(hardware);
@@ -194,62 +207,99 @@ bool Hardware_open(Hardware **out, const Hardware_config *config,
     *out = hardware;
     return true;
 }
-
-bool Hardware_readAdc(Hardware *hardware, uint16_t *raw)
+bool Hardware_readAdc(Hardware *hardware, unsigned channel, uint16_t *raw)
 {
-    if (!hardware->has_adc) { errno = EINVAL; return false; }
+    if (!hardware->has_adc || channel > 7) { errno = EINVAL; return false; }
     if (hardware->config.simulate) {
         if (hardware->config.fault == FAULT_ADC_IO) { errno = EIO; return false; }
-        //model an independent physical 10k/10k divider on 3.3v, not the
-        //configured expected value. wrong resistor expectations can fail.
-        int value = 2048 + (int)(hardware->sample_index++ % 5) - 2;
-        if (hardware->config.fault == FAULT_DIVIDER_LOW) value -= 600;
-        *raw = (uint16_t)value;
+        double volts;
+        if (channel == hardware->config.rc_channel) {
+            updateModel(hardware);
+            volts = hardware->sim_voltage;
+            if (hardware->config.fault == FAULT_RC_LOW) volts = 0;
+            if (hardware->config.fault == FAULT_RC_HIGH) volts = 3.3;
+        } else {
+            //fixed physical 10k/10k, 3.3v divider, independent of expectations.
+            volts = 1.65 + ((int)(hardware->sample_index++ % 5) - 2) * 0.0005;
+            if (hardware->config.fault == FAULT_DIVIDER_LOW) volts -= 0.48;
+        }
+        //quantize the simulated voltage with the same adc reference as hardware
+        double code = volts / hardware->config.reference_volts * 4096.0;
+        if (code < 0) code = 0;
+        if (code > 4095) code = 4095;
+        *raw = (uint16_t)code;
         return true;
     }
 #ifdef ENABLE_HARDWARE
-    return readSpi(hardware, raw);
+    return readSpi(hardware, channel, raw);
 #else
     errno = ENOSYS;
     return false;
 #endif
 }
-bool Hardware_setInputs(Hardware *hardware, bool a, bool b)
+bool Hardware_setDrive(Hardware *hardware, bool high)
 {
     if (!hardware->has_gpio) { errno = EINVAL; return false; }
     if (hardware->config.simulate) {
         if (hardware->config.fault == FAULT_GPIO_IO) { errno = EIO; return false; }
-        hardware->a = a;
-        hardware->b = b;
+        updateModel(hardware);
+        hardware->drive = high;
         return true;
     }
 #ifdef ENABLE_HARDWARE
-    return writePin(&hardware->pins[0], a) && writePin(&hardware->pins[1], b);
+    return writePin(&hardware->pins[0], high);
 #else
     errno = ENOSYS;
     return false;
 #endif
 }
-bool Hardware_readOutput(Hardware *hardware, bool *y)
+bool Hardware_readOutput(Hardware *hardware, bool *high)
 {
-    if (!hardware->has_gpio) { errno = EINVAL; return false; }
+    if (!hardware->has_gpio || !hardware->config.need_loopback) {
+        errno = EINVAL; return false;
+    }
     if (hardware->config.simulate) {
         if (hardware->config.fault == FAULT_GPIO_IO) { errno = EIO; return false; }
-        *y = hardware->config.simulate_loopback ? hardware->a
-                                               : !(hardware->a && hardware->b);
-        if (hardware->config.fault == FAULT_LOGIC_LOW) *y = false;
+        *high = hardware->drive;
         return true;
     }
 #ifdef ENABLE_HARDWARE
-    int value = readPin(&hardware->pins[2]);
+    int value = readPin(&hardware->pins[1]);
     if (value < 0) return false;
-    *y = value != 0;
+    *high = value != 0;
     return true;
 #else
     errno = ENOSYS;
     return false;
 #endif
 }
+//use virtual time only in simulation and monotonic time on the board
+bool Hardware_now(Hardware *hardware, double *seconds)
+{
+    if (hardware->config.simulate) { *seconds = hardware->sim_time; return true; }
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now)) return false;
+    *seconds = now.tv_sec + now.tv_nsec * 1e-9;
+    return true;
+}
+//simulation advances immediately while real hardware waits between samples
+bool Hardware_wait(Hardware *hardware, double seconds,
+                   const volatile sig_atomic_t *stop)
+{
+    if (*stop) { errno = EINTR; return false; }
+    if (hardware->config.simulate) {
+        hardware->sim_time += seconds;
+        return true;
+    }
+    struct timespec delay = { .tv_sec = (time_t)seconds,
+        .tv_nsec = (long)((seconds - floor(seconds)) * 1e9) };
+    while (nanosleep(&delay, &delay) < 0) {
+        if (errno != EINTR || *stop) return false;
+    }
+    if (*stop) { errno = EINTR; return false; }
+    return true;
+}
+//attempt output reset before releasing pins and descriptors
 bool Hardware_close(Hardware *hardware)
 {
     if (!hardware) return true;
@@ -257,16 +307,12 @@ bool Hardware_close(Hardware *hardware)
     int saved_error = 0;
 #ifdef ENABLE_HARDWARE
     if (!hardware->config.simulate) {
-        for (unsigned i = 0; i < 2; i++) {
-            if (pinRequested(&hardware->pins[i]) && !writePin(&hardware->pins[i], false)) {
-                ok = false;
-                saved_error = errno;
-            }
+        if (pinRequested(&hardware->pins[0]) && !writePin(&hardware->pins[0], false)) {
+            ok = false; saved_error = errno;
         }
-        for (unsigned i = 0; i < 3; i++) releasePin(&hardware->pins[i]);
+        for (unsigned i = 0; i < 2; i++) releasePin(&hardware->pins[i]);
         if (hardware->spi_fd >= 0 && close(hardware->spi_fd) < 0) {
-            ok = false;
-            saved_error = errno;
+            ok = false; saved_error = errno;
         }
     }
 #endif
