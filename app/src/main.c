@@ -13,7 +13,7 @@ typedef struct { Hardware_config hardware; Test_config test; } Options;
 static const char usage[] =
     "Usage: board_diagnostics [--simulate] [--test divider|rc|adc|loopback|all]\n"
     "  --spi PATH          MCP3208 SPI device (default /dev/spidev0.0)\n"
-    "  --channel N         Divider/raw ADC channel 0..7 (default 3)\n"
+    "  --channel N         Divider/raw ADC channel 0..7 (default 0)\n"
     "  --rc-channel N      RC ADC channel 0..7 (default 2)\n"
     "  --drive NAME        GPIO charging output (default GPIO22)\n"
     "  --sense NAME        GPIO loopback input (default GPIO24)\n"
@@ -155,7 +155,7 @@ int main(int argc, char **argv)
         .hardware = { .spi_device = "/dev/spidev0.0", .gpio_drive = "GPIO22", .gpio_sense = "GPIO24" },
         .test = { .kind = TEST_DIVIDER, .top_ohms = 10000, .bottom_ohms = 10000,
             .supply_volts = 3.3, .reference_volts = 3.3, .tolerance_volts = 0.10,
-            .samples = 32, .adc_channel = 3, .rc_channel = 2, .resistance_ohms = 50000,
+            .samples = 32, .adc_channel = 0, .rc_channel = 2, .resistance_ohms = 50000,
             .capacitance_uf = 10, .tau_tolerance = 0.25, .interval_s = 0.005 }
     };
     for (int i = 1; i < argc; i++)

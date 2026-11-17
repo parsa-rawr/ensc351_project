@@ -34,10 +34,15 @@ Hardware build on the BeagleY-AI (Debian packages):
 sudo apt install build-essential cmake pkg-config libgpiod-dev
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=OFF
 cmake --build build
-./build/app/board_diagnostics --test divider
+sudo ./build/app/board_diagnostics --test divider
 ./build/app/board_diagnostics --test rc --csv hardware-rc-001.csv
 ./build/app/board_diagnostics --test all --csv hardware-all-001.csv
 ```
+
+The divider command defaults to CH0, matching the tested circuit. If SPI device
+access is denied, use sudo as above or configure the appropriate device permissions.
+
+![Divider and RC circuit layouts](docs/circuits.png)
 
 Run a matching ARM executable on the board, not a host/VM executable. If
 cross-compiling, use the correct target toolchain and sysroot. Check `uname -m`
@@ -46,7 +51,7 @@ and `file` before deployment. CMake supports libgpiod 1.x (>=1.4) and 2.x.
 `-DENABLE_ASAN=ON` enables AddressSanitizer where its runtime is available.
 
 `--test all` runs **divider then RC**; GPIO loopback is a separate wiring setup.
-Default mode is divider. Exit codes: 0 = pass/measurement completed, 1 = circuit
+Default mode is divider, with divider/raw measurements on CH0 and RC on CH2. Exit codes: 0 = pass/measurement completed, 1 = circuit
 failure, 2 = invalid configuration or acquisition/I/O error, 130 = interrupted.
 SIGINT/SIGTERM stop acquisition and trigger resource cleanup. GPIO drive is
 reset low before release. Check exit status as well as printed results.
@@ -66,7 +71,7 @@ Use 3.3 V throughout, a common ground, and a breadboard.
 | 21: MISO | 12 DOUT |
 | 23: SCLK | 13 CLK |
 | 24: CE0 | 10 CS/SHDN |
-| Divider midpoint | 4 CH3 |
+| Divider midpoint | 1 CH0 |
 | RC capacitor node | 3 CH2 |
 
 Fit a 0.1 uF capacitor close to ADC VDD/GND. Keep analog leads short.
@@ -84,7 +89,7 @@ References: [Microchip MCP3204/3208 datasheet](https://ww1.microchip.com/downloa
 ## Circuit 1: voltage divider
 
 Wire 3.3 V through a 10k resistor to the divider midpoint, then through a
-second 10k resistor to ground. Connect the midpoint to MCP3208 CH3.
+second 10k resistor to ground. Connect the midpoint to MCP3208 CH0 (pin 1).
 Expected voltage is `supply * Rbottom / (Rtop + Rbottom)` = 1.65 V at 3.3 V.
 The default check takes 32 samples, and the mean AND every sample must be
 within +/-0.10 V of expectation.

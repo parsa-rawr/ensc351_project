@@ -22,7 +22,7 @@ def check(args, status, *expected):
     return output
 
 check(['--help'], 0, '--test divider|rc|adc|loopback|all', '--capacitance-uf')
-check(['--simulate'], 0, 'SIMULATION', 'expected=1.6500V', 'RESULT PASS: voltage divider')
+check(['--simulate'], 0, 'SIMULATION', 'divider_channel=0 rc_channel=2', 'expected=1.6500V', 'RESULT PASS: voltage divider')
 output = check(['--simulate', '--test', 'all'], 0, 'OVERALL PASS', 'RESULT PASS: RC')
 for phase in ['charge', 'discharge']:
     tau = float(re.search(rf'RC {phase}_tau=([0-9.]+)s', output).group(1))
@@ -49,7 +49,7 @@ invalid = [
     ['--samples', '0'], ['--samples', 'nan'], ['--channel', '8'], ['--channel', '-1'],
     ['--rtop', '0'], ['--vref', 'nan'], ['--test', 'unknown'], ['--test', 'logic'],
     ['--fault', 'adc-error'], ['--samples'], ['--unknown', 'x'], ['--rc-channel', '8'],
-    ['--test', 'all', '--rc-channel', '3'], ['--csv', 'unused.csv'],
+    ['--test', 'all', '--rc-channel', '0'], ['--csv', 'unused.csv'],
     ['--test', 'loopback', '--drive', 'GPIO24'],
     ['--test', 'rc', '--resistance', '0'], ['--test', 'rc', '--capacitance-uf', '-10'],
     ['--test', 'rc', '--interval-ms', '100'], ['--test', 'rc', '--window', '0.5'],

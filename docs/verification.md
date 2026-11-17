@@ -26,11 +26,14 @@ cmake --build build-sim
 ctest --test-dir build-sim --output-on-failure
 ```
 
+CH0 default update: rebuilt with strict GCC warnings and static analysis; all
+51 acceptance scenarios passed, including the default-channel assertion.
+
 Captured combined run:
 
 ```text
 SIMULATION: synthetic circuits and virtual time; not hardware measurements or timing.
-ADC device=/dev/spidev0.0 divider_channel=3 rc_channel=2 reference=3.3000V
+ADC device=/dev/spidev0.0 divider_channel=0 rc_channel=2 reference=3.3000V
 GPIO drive=GPIO22
 ADC SUMMARY samples=32 min=1.6484V max=1.6508V mean=1.6496V
 DIVIDER expected=1.6500V measured=1.6496V error=-0.0004V tolerance=+/-0.1000V
@@ -43,7 +46,7 @@ RESULT PASS: RC charge/discharge
 OVERALL PASS
 ```
 
-Before collecting physical evidence, verify SPI availability, GPIO mapping,
+For additional physical testing, verify SPI availability, GPIO mapping,
 actual supply/reference voltages, wiring and component values on the BeagleY-AI.
 Use a NEW --csv filename and retain terminal results and exit status. Photograph
 the normal circuit, then power off and change only the RC resistance from 50k
