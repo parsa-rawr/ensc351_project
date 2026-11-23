@@ -8,6 +8,9 @@ ADC channels. The web dashboard is a separate prototype and is not connected by
 this repository. RC sample CSV capture is implemented; a persistent run-history
 service is not.
 
+**CircuitCheck prototype:** [Open the standalone UI and circuit design](docs/circuitcheck/index.html). The browser preview uses simulated readings and is separate from the hardware C application.
+
+
 ## Build and run
 
 Host simulation (GCC, CMake >= 3.18, Python 3):
