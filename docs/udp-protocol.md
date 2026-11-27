@@ -34,6 +34,8 @@ All responses go back to the controller's source IP and port. Duplicate commands
 
 ## Board addresses
 
+See the [board communication guide](board-network.md) for discovery and a first wired test.
+
 Once connected to the same network, run `ip -4 -brief address show scope global` on each BeagleY-AI. Send Person 2 your board number and the IPv4 address for the shared-network interface.
 
 Protocol supplied by the team and formatted with Codex assistance.
