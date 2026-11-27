@@ -4,12 +4,11 @@ A Linux C11 application for **MCP3208 SPI measurements**, voltage-divider
 validation, **RC charging/discharging and time-constant estimation**, and GPIO
 loopback. The kit's resistors and capacitor provide the RC circuit; no digital
 logic IC is needed. The divider and RC circuits can stay connected on separate
-ADC channels. The web dashboard is a separate prototype and is not connected by
-this repository. RC sample CSV capture is implemented; a persistent run-history
-service is not.
+ADC channels. The C application supports RC sample CSV capture.
 
-**CircuitCheck prototype:** [Open the standalone UI and circuit design](docs/circuitcheck/index.html). The browser preview uses simulated readings and is separate from the hardware C application.
-
+**CircuitCheck Pro:** The [dashboard setup and controller protocol](docs/circuitcheck/README.md)
+cover real measurements and result history for the three-board project. The
+Node.js bridge expects Board 1's dashboard interface on UDP 35100.
 
 ## Build and run
 

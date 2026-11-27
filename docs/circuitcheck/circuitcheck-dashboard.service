@@ -1,0 +1,20 @@
+[Unit]
+Description=CircuitCheck Pro dashboard
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=circuitcheck-dashboard
+Environment=DATA_DIR=/var/lib/circuitcheck-dashboard
+Environment=CONTROLLER_IP=127.0.0.1
+EnvironmentFile=-/etc/circuitcheck-dashboard.env
+WorkingDirectory=/opt/circuitcheck-dashboard
+ExecStart=/usr/bin/node /opt/circuitcheck-dashboard/server.js
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
