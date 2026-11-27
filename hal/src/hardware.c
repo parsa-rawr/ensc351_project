@@ -237,6 +237,12 @@ bool Hardware_readAdc(Hardware *hardware, unsigned channel, uint16_t *raw)
     return false;
 #endif
 }
+bool Hardware_readVoltage(Hardware *hardware, unsigned channel, uint16_t *raw, double *volts)
+{
+    if (!Hardware_readAdc(hardware, channel, raw)) return false;
+    *volts = *raw / 4096.0 * hardware->config.reference_volts;
+    return true;
+}
 bool Hardware_setDrive(Hardware *hardware, bool high)
 {
     if (!hardware->has_gpio) { errno = EINVAL; return false; }

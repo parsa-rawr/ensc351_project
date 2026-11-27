@@ -11,14 +11,6 @@ static int ioError(const char *operation)
     puts("RESULT ERROR: measurements are incomplete; no PASS result.");
     return DIAGNOSTIC_ERROR;
 }
-//convert the twelve bit code using the configured reference voltage
-static bool readVoltage(Hardware *hw, const Test_config *c, unsigned channel,
-                        uint16_t *raw, double *volts)
-{
-    if (!Hardware_readAdc(hw, channel, raw)) return false;
-    *volts = *raw / 4096.0 * c->reference_volts;
-    return true;
-}
 static int runAnalog(Hardware *hw, const Test_config *c,
                      const volatile sig_atomic_t *stop)
 {
@@ -27,7 +19,7 @@ static int runAnalog(Hardware *hw, const Test_config *c,
         if (*stop) { errno = EINTR; return ioError("ADC interrupted"); }
         uint16_t raw;
         double volts;
-        if (!readVoltage(hw, c, c->adc_channel, &raw, &volts)) return ioError("ADC transfer");
+        if (!Hardware_readVoltage(hw, c->adc_channel, &raw, &volts)) return ioError("ADC transfer");
         if (!i || volts < minimum) minimum = volts;
         if (!i || volts > maximum) maximum = volts;
         sum += volts;
@@ -88,7 +80,7 @@ static bool samplePhase(Hardware *hw, const Test_config *c,
         if (*stop) { errno = EINTR; return false; }
         double before, after, volts;
         uint16_t raw;
-        if (!Hardware_now(hw, &before) || !readVoltage(hw, c, c->rc_channel, &raw, &volts)
+        if (!Hardware_now(hw, &before) || !Hardware_readVoltage(hw, c->rc_channel, &raw, &volts)
             || !Hardware_now(hw, &after)) return false;
         double t = (before + after) * 0.5 - start;
         double expected_tau = c->resistance_ohms * c->capacitance_uf * 1e-6;

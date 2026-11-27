@@ -17,6 +17,7 @@ typedef struct {
 bool Hardware_open(Hardware **out, const Hardware_config *config,
                    bool need_adc, bool need_gpio);
 bool Hardware_readAdc(Hardware *hardware, unsigned channel, uint16_t *raw);
+bool Hardware_readVoltage(Hardware *hardware, unsigned channel, uint16_t *raw, double *volts);
 bool Hardware_setDrive(Hardware *hardware, bool high);
 bool Hardware_readOutput(Hardware *hardware, bool *high);
 //real monotonic time on hardware; deterministic virtual time in simulation.

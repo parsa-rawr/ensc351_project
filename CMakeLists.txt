@@ -21,4 +21,8 @@ if(BUILD_TESTING)
     add_test(NAME diagnostic_scenarios
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.py"
                 "$<TARGET_FILE:board_diagnostics>")
+    add_test(NAME board2_udp
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/board2_udp.py"
+                "$<TARGET_FILE:board2_measurement>")
+    set_tests_properties(board2_udp PROPERTIES TIMEOUT 35 RESOURCE_LOCK board2_udp_port)
 endif()

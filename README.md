@@ -11,6 +11,8 @@ service is not.
 **CircuitCheck prototype:** [Open the standalone UI and circuit design](docs/circuitcheck/index.html). The browser preview uses simulated readings and is separate from the hardware C application.
 
 
+The distributed final project uses the [shared UDP protocol](docs/udp-protocol.md). See the [Board 2 measurement service](docs/board2.md) for its build, wiring, and integration steps.
+
 ## Build and run
 
 Host simulation (GCC, CMake >= 3.18, Python 3):

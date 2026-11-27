@@ -8,3 +8,12 @@ if(DEPLOY_DIR)
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${DEPLOY_DIR}"
         COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:board_diagnostics>" "${DEPLOY_DIR}")
 endif()
+
+add_executable(board2_measurement src/board2.c src/measurement.c)
+target_include_directories(board2_measurement PRIVATE include)
+target_link_libraries(board2_measurement PRIVATE hal m)
+if(DEPLOY_DIR)
+    add_custom_command(TARGET board2_measurement POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${DEPLOY_DIR}"
+        COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:board2_measurement>" "${DEPLOY_DIR}")
+endif()
