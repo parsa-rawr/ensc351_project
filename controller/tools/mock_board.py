@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Local UDP mock for CircuitCheck Pro Board 2 or Board 3."""
 import argparse
+import heapq
+import itertools
 import json
+import random
 import signal
 import socket
 import time
@@ -38,11 +41,23 @@ def main():
                         help="send each ACK twice to exercise duplicate handling")
     parser.add_argument("--inject-late-acks", action="store_true",
                         help="send stale test-ID ACKs along with heartbeats")
+    parser.add_argument("--delay-min-ms", type=int, default=0,
+                        help="minimum seeded response delay")
+    parser.add_argument("--delay-max-ms", type=int, default=0,
+                        help="maximum seeded response delay")
+    parser.add_argument("--loss-rate", type=float, default=0.0,
+                        help="seeded per-response packet loss probability (0..1)")
+    parser.add_argument("--seed", type=int, default=1,
+                        help="reproducible impairment seed")
     args = parser.parse_args()
     try:
         drop_rules = parse_drops(args.drop)
     except argparse.ArgumentTypeError as error:
         parser.error(str(error))
+    if args.delay_min_ms < 0 or args.delay_max_ms < args.delay_min_ms:
+        parser.error("response delay must satisfy 0 <= min <= max")
+    if not 0 <= args.loss_rate <= 1:
+        parser.error("--loss-rate must be between 0 and 1")
 
     number = args.board
     port = 35102 if number == 2 else 35103
@@ -50,6 +65,10 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((args.bind_ip, port))
     sock.settimeout(0.05)
+    rng = random.Random(args.seed + number)
+    scheduled = []
+    sequence = itertools.count()
+    counts = {"sent": 0, "loss_dropped": 0, "rule_dropped": 0}
     running = True
 
     def stop(_signum, _frame):
@@ -68,22 +87,42 @@ def main():
     def send(message, kind):
         remaining = drop_rules.get(kind, 0)
         if remaining is None:
+            counts["rule_dropped"] += 1
             print(f"SIMULATED Board {number} deliberately dropped {kind}", flush=True)
             return
         if remaining:
             drop_rules[kind] = remaining - 1
+            counts["rule_dropped"] += 1
             print(f"SIMULATED Board {number} deliberately dropped {kind}", flush=True)
             return
-        sock.sendto(message.encode("utf-8"), controller)
-        if kind == "RESULT" and args.duplicate_result:
-            sock.sendto(message.encode("utf-8"), controller)
-        if kind in ("PREPARE", "ARM", "START", "ABORT") and args.duplicate_acks:
-            sock.sendto(message.encode("utf-8"), controller)
-        print(f"SIMULATED Board {number} sent {message}", flush=True)
+        copies = 2 if ((kind == "RESULT" and args.duplicate_result)
+                       or (kind in ("PREPARE", "ARM", "START", "ABORT")
+                           and args.duplicate_acks)) else 1
+        for _ in range(copies):
+            if args.loss_rate and rng.random() < args.loss_rate:
+                counts["loss_dropped"] += 1
+                print(f"SIMULATED Board {number} intermittent loss dropped {kind}", flush=True)
+                continue
+            delay_ms = rng.randint(args.delay_min_ms, args.delay_max_ms)
+            due = time.monotonic() + delay_ms / 1000.0
+            heapq.heappush(scheduled, (due, next(sequence), message.encode("utf-8"),
+                                       message, delay_ms))
+
+    def flush_scheduled(now):
+        while scheduled and scheduled[0][0] <= now:
+            _, _, payload, message, delay_ms = heapq.heappop(scheduled)
+            try:
+                sock.sendto(payload, controller)
+            except OSError as error:
+                print(f"SIMULATED Board {number} send error: {error}", flush=True)
+                continue
+            counts["sent"] += 1
+            print(f"SIMULATED Board {number} sent {message} delay_ms={delay_ms}", flush=True)
 
     try:
         while running:
             now = time.monotonic()
+            flush_scheduled(now)
             if (number == 3 and state["started"] and state["started_at"] is not None
                     and (now - state["started_at"]) * 1000 >= args.max_stimulus_duration_ms):
                 state["started"] = False
@@ -119,6 +158,11 @@ def main():
             except UnicodeDecodeError:
                 continue
             fields = message.split(",", 3)
+            if args.loss_rate and rng.random() < args.loss_rate:
+                counts["loss_dropped"] += 1
+                print(f"SIMULATED Board {number} intermittent loss dropped inbound {fields[0]}",
+                      flush=True)
+                continue
             if fields[0] == "PING" and len(fields) == 2 and fields[1].isdigit():
                 if not args.drop_heartbeats:
                     send(f"PONG,{number},{fields[1]}", "PONG")
@@ -182,6 +226,10 @@ def main():
                                      last_result_send=0.0)
             # All malformed or unsupported datagrams are intentionally ignored.
     finally:
+        print(f"STRESS_SUMMARY board={number} seed={args.seed + number} "
+              f"sent={counts['sent']} loss_dropped={counts['loss_dropped']} "
+              f"rule_dropped={counts['rule_dropped']} "
+              f"delay_ms={args.delay_min_ms}..{args.delay_max_ms}", flush=True)
         sock.close()
 
 

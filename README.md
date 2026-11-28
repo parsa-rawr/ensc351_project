@@ -202,3 +202,5 @@ then run `./build-controller/controller/circuit_controller`. The dashboard UDP
 interface binds only to localhost port 35100; the controller listens on UDP
 35101 and stations use 35102/35103. Full message formats, JSON fields, timing,
 cleanup, and mock fault options are documented in `docs/network-protocol.md`.
+Build and deployment scripts, systemd installation, dashboard CLI, and network
+troubleshooting are described in `docs/controller-deployment.md`.

@@ -16,6 +16,7 @@
 #include <unistd.h>
 
 enum { BOARD2 = 0, BOARD3 = 1, BOARD_COUNT = 2, MAX_HISTORY = 64,
+       HEARTBEAT_HISTORY = 4,
        PACKET_CAP = 8192, JSON_CAP = 4096, ID_CAP = 80 };
 static const uint64_t HEARTBEAT_NS = UINT64_C(1000000000);
 static const uint64_t OFFLINE_NS = UINT64_C(3000000000);
@@ -25,13 +26,19 @@ typedef enum { WAIT_NONE, WAIT_PREPARE, WAIT_ARM, WAIT_START } Wait_kind;
 typedef enum { FINAL_COMPLETED, FINAL_FAILED, FINAL_ABORTED } Final_state;
 
 typedef struct {
+    uint64_t nonce;
+    uint64_t sent_ns;
+    bool pending;
+} Heartbeat_probe;
+
+typedef struct {
     struct sockaddr_in endpoint;
     unsigned number;
     const char *name;
     bool online;
     uint64_t last_pong_ns;
-    uint64_t nonce;
-    uint64_t ping_sent_ns;
+    Heartbeat_probe probes[HEARTBEAT_HISTORY];
+    unsigned next_probe;
     bool have_latency;
     double latency_last_ms;
     double latency_avg_ms;
@@ -616,6 +623,12 @@ static void startTest(Controller *c, const char *request_id,
                       const char *type, const char *fault,
                       const struct sockaddr_in *dashboard_peer)
 {
+    size_t request_id_length = strlen(request_id);
+    if (!request_id_length || request_id_length >= ID_CAP) {
+        sendDashboard(c, dashboard_peer, visibleTest(c), NULL, NULL, false,
+                      "invalid request_id");
+        return;
+    }
     Test_record *same = findRequest(c, request_id);
     if (same) {
         sendDashboard(c, dashboard_peer, same, request_id, same->id, true, NULL);
@@ -652,7 +665,7 @@ static void startTest(Controller *c, const char *request_id,
                       "could not create test ID");
         return;
     }
-    snprintf(test->request_id, sizeof(test->request_id), "%s", request_id);
+    memcpy(test->request_id, request_id, request_id_length + 1);
     snprintf(test->type, sizeof(test->type), "%s", type);
     snprintf(test->fault, sizeof(test->fault), "%s", fault);
     test->state = PREPARING;
@@ -718,10 +731,10 @@ static void handleDashboardPacket(Controller *c, char *packet,
     sendDashboardError(c, peer, "invalid dashboard request");
 }
 
-static void updateBoardLatency(Board *board, uint64_t now)
+static void updateBoardLatency(Board *board, uint64_t sent_ns, uint64_t now)
 {
-    if (!board->ping_sent_ns || now < board->ping_sent_ns) return;
-    double latency = (double)(now - board->ping_sent_ns) / 1000000.0;
+    if (!sent_ns || now < sent_ns) return;
+    double latency = (double)(now - sent_ns) / 1000000.0;
     board->latency_last_ms = latency;
     if (!board->have_latency) {
         board->latency_min_ms = latency;
@@ -804,11 +817,20 @@ static void handleBoardPacket(Controller *c, char *packet,
         *comma++ = '\0';
         uint64_t number, nonce;
         if (!parseUint64(number_text, &number) || number != source->number
-            || !parseUint64(comma, &nonce) || nonce != source->nonce) return;
+            || !parseUint64(comma, &nonce)) return;
+        Heartbeat_probe *probe = NULL;
+        for (unsigned i = 0; i < HEARTBEAT_HISTORY; i++) {
+            if (source->probes[i].pending && source->probes[i].nonce == nonce) {
+                probe = &source->probes[i];
+                break;
+            }
+        }
+        if (!probe) return;
         uint64_t now = monotonicNs();
         bool was_online = source->online;
         source->last_pong_ns = now;
-        updateBoardLatency(source, now);
+        updateBoardLatency(source, probe->sent_ns, now);
+        probe->pending = false;
         source->online = true;
         if (!was_online) {
             printf("BOARD %u ONLINE\n", source->number);
@@ -897,10 +919,12 @@ static void sendHeartbeats(Controller *c, uint64_t now)
 {
     for (unsigned i = 0; i < BOARD_COUNT; i++) {
         Board *board = &c->boards[i];
-        board->nonce = ++c->nonce_seed;
-        board->ping_sent_ns = now;
+        Heartbeat_probe *probe = &board->probes[board->next_probe++ % HEARTBEAT_HISTORY];
+        probe->nonce = ++c->nonce_seed;
+        probe->sent_ns = now;
+        probe->pending = true;
         char ping[96];
-        (void)snprintf(ping, sizeof(ping), "PING,%" PRIu64, board->nonce);
+        (void)snprintf(ping, sizeof(ping), "PING,%" PRIu64, probe->nonce);
         (void)sendBoard(c, board, ping);
     }
     c->next_heartbeat_ns = now + HEARTBEAT_NS;
@@ -1025,8 +1049,8 @@ int controller_run(const Controller_config *config, const volatile sig_atomic_t 
            config->controller_port, config->dashboard_port, config->board2_ip,
            config->board2_port, config->board3_ip, config->board3_port);
     fflush(stdout);
-    bool finished = false;
-    while (!finished) {
+    int exit_status = 0;
+    for (;;) {
         uint64_t now = monotonicNs();
         updateConnectivity(&c, now);
         if (now >= c.next_heartbeat_ns) sendHeartbeats(&c, now);
@@ -1046,6 +1070,7 @@ int controller_run(const Controller_config *config, const volatile sig_atomic_t 
             if (errno == EINTR) continue;
             perror("poll");
             if (c.current >= 0) failTest(&c, "poll event loop failed");
+            exit_status = 1;
             break;
         }
         if (descriptors[0].revents & POLLIN) receivePackets(&c, c.board_fd, false);
@@ -1053,10 +1078,11 @@ int controller_run(const Controller_config *config, const volatile sig_atomic_t 
         if (descriptors[0].revents & (POLLERR | POLLHUP | POLLNVAL)
             || descriptors[1].revents & (POLLERR | POLLHUP | POLLNVAL)) {
             if (c.current >= 0) failTest(&c, "UDP socket failure");
+            exit_status = 1;
             break;
         }
     }
     close(c.dashboard_fd);
     close(c.board_fd);
-    return 0;
+    return exit_status;
 }

@@ -10,6 +10,7 @@ import time
 
 CONTROLLER = str(Path(sys.argv[1]).resolve())
 MOCK = str(Path(sys.argv[2]).resolve())
+CLI = str(Path(MOCK).with_name("controller_cli.py"))
 
 
 class Fixture:
@@ -120,6 +121,95 @@ def successful_sequence():
         assert board3_output.count("prepared ") == 1, board3_output
         assert board3_output.count("started ") == 1, board3_output
         assert board3_output.count("stopped stimulus") == 1, board3_output
+    finally:
+        f.close()
+
+
+def sequential_runs():
+    f = Fixture()
+    try:
+        f.wait_online()
+        ids = []
+        for index in range(1, 4):
+            response = f.run(f"sequential-{index}", "DIVIDER", "NONE")
+            ids.append(response["test_id"])
+            result = f.wait_state(response["test_id"], "COMPLETED")
+            assert result["measurement_result"]["status"] == "PASS", result
+        assert len(set(ids)) == 3, ids
+        board2_output = Fixture.finish(f.processes["board2"])
+        board3_output = Fixture.finish(f.processes["board3"])
+        assert board2_output.count("armed ") == 3, board2_output
+        assert board3_output.count("started ") == 3, board3_output
+    finally:
+        f.close()
+
+
+def seeded_delay_and_loss_stress():
+    f = Fixture(
+        board2_args=("--seed", "4102", "--delay-min-ms", "250", "--delay-max-ms", "1500",
+                     "--loss-rate", "0.12"),
+        board3_args=("--seed", "4103", "--delay-min-ms", "250", "--delay-max-ms", "1500",
+                     "--loss-rate", "0.12", "--drop", "PREPARE=1"),
+        command_timeout=2000, measurement_timeout=12000, cleanup_timeout=2000, retries=3)
+    try:
+        started = time.monotonic()
+        f.wait_online(timeout=7)
+        response = f.run("seeded-stress", "RC", "NONE")
+        result = f.wait_state(response["test_id"], "COMPLETED", timeout=20)
+        elapsed_ms = (time.monotonic() - started) * 1000
+        assert result["measurement_result"]["status"] == "PASS", result
+        assert result["cleanup_acknowledgements"] == {
+            "board2": "confirmed", "board3": "confirmed"}, result
+        latency = result["network_latency_ms"]
+        for board in ("board2", "board3"):
+            assert latency[board]["minimum"] >= 250, latency
+            assert latency[board]["maximum"] <= 1700, latency
+        board2_output = Fixture.finish(f.processes["board2"])
+        board3_output = Fixture.finish(f.processes["board3"])
+        controller_output = Fixture.finish(f.controller)
+        loss_count = board2_output.count("intermittent loss dropped")
+        loss_count += board3_output.count("intermittent loss dropped")
+        retry_count = controller_output.count("RETRY ")
+        assert loss_count > 0, (board2_output, board3_output)
+        assert retry_count >= 1, controller_output
+        print("STRESS_MEASURED "
+              f"elapsed_ms={elapsed_ms:.1f} "
+              f"pong_min_ms={min(latency['board2']['minimum'], latency['board3']['minimum']):.1f} "
+              f"pong_max_ms={max(latency['board2']['maximum'], latency['board3']['maximum']):.1f} "
+              f"seeded_loss_drops={loss_count} command_retries={retry_count} "
+              f"result={result['measurement_result']['status']}")
+    finally:
+        f.close()
+
+
+def dashboard_cli_commands():
+    f = Fixture(board2_args=("--result-delay-ms", "2500"), measurement_timeout=6000)
+    try:
+        f.wait_online()
+        status = subprocess.run([sys.executable, CLI, "status"], capture_output=True,
+                                text=True, timeout=4)
+        assert status.returncode == 0, (status.stdout, status.stderr)
+        assert json.loads(status.stdout)["board2_connected"] is True
+
+        started = subprocess.run([sys.executable, CLI, "--timeout", "2", "run", "DIVIDER",
+                                  "--request-id", "cli-run-1", "--wait", "--wait-timeout", "8"],
+                                 capture_output=True, text=True, timeout=12)
+        assert started.returncode == 0, (started.stdout, started.stderr)
+        completed = json.loads(started.stdout)
+        assert completed["state"] == "COMPLETED", completed
+        test_id = completed["current_test_id"]
+
+        fetched = subprocess.run([sys.executable, CLI, "result", test_id],
+                                 capture_output=True, text=True, timeout=4)
+        assert fetched.returncode == 0, (fetched.stdout, fetched.stderr)
+        assert json.loads(fetched.stdout)["measurement_result"]["status"] == "PASS"
+
+        active = f.run("cli-abort", "RC", "NONE")
+        aborted = subprocess.run([sys.executable, CLI, "abort", active["test_id"],
+                                  "--wait", "--wait-timeout", "5"],
+                                 capture_output=True, text=True, timeout=8)
+        assert aborted.returncode == 0, (aborted.stdout, aborted.stderr)
+        assert json.loads(aborted.stdout)["state"] == "ABORTED"
     finally:
         f.close()
 
@@ -279,13 +369,29 @@ def board3_safe_stop_when_board2_is_unavailable():
     try:
         f.wait_online()
         response = f.run("board2-loss")
+        deadline = time.monotonic() + 3.0
+        progress = None
+        while time.monotonic() < deadline:
+            progress = f.request(f"GET_RESULT,{response['test_id']}")
+            if progress["test_progress"] == "measuring":
+                break
+            time.sleep(0.04)
+        assert progress and progress["test_progress"] == "measuring", progress
         Fixture.finish(f.processes["board2"])
         result = f.wait_state(response["test_id"], "FAILED", timeout=6)
         assert result["cleanup_acknowledgements"] == {
             "board2": "unconfirmed", "board3": "confirmed"}, result
         assert "Board 2 heartbeat lost" in result["error_message"], result
+        f.start_board(2)
+        f.wait_online(timeout=4)
+        recovery = f.run("board2-reconnected")
+        recovered = f.wait_state(recovery["test_id"], "COMPLETED")
+        assert recovered["measurement_result"]["status"] == "PASS", recovered
+        followup = f.run("after-recovery")
+        followed = f.wait_state(followup["test_id"], "COMPLETED")
+        assert followed["measurement_result"]["status"] == "PASS", followed
         board3_output = Fixture.finish(f.processes["board3"])
-        assert "stopped stimulus" in board3_output, board3_output
+        assert board3_output.count("stopped stimulus") == 3, board3_output
         assert board3_output.count("sent PONG,3,") >= 2, board3_output
     finally:
         f.close()
@@ -307,6 +413,9 @@ def mock_board3_local_stimulus_timeout():
 
 
 successful_sequence()
+sequential_runs()
+seeded_delay_and_loss_stress()
+dashboard_cli_commands()
 faulty_result_and_duplicate_request()
 command_retry_and_measurement_timeout()
 requested_abort()

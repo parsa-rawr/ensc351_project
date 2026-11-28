@@ -1,0 +1,29 @@
+[Unit]
+Description=CircuitCheck Pro distributed test controller
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=circuitcheck
+Group=circuitcheck
+EnvironmentFile=/etc/circuitcheck/controller.env
+ExecStart=/usr/local/bin/circuit_controller --bind-ip ${CONTROLLER_BIND_IP} --board2-ip ${BOARD2_IP} --board3-ip ${BOARD3_IP} --command-timeout-ms ${COMMAND_TIMEOUT_MS} --measurement-timeout-ms ${MEASUREMENT_TIMEOUT_MS} --cleanup-timeout-ms ${CLEANUP_TIMEOUT_MS} --retries ${RETRIES}
+Restart=on-failure
+RestartSec=3s
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
