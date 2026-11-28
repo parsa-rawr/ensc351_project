@@ -15,8 +15,8 @@ typedef struct {
     Measurement_kind kind;
     double start, previous_time, previous_v;
     double first_signal, peak, charge_10, charge_60, discharge_85, discharge_35;
-    double last_edge;
-    bool falling, pwm_high;
+    double fall_started, last_edge;
+    bool pwm_high;
     Measurement_stats volts, sample_ms, period_ms;
 } Measurement;
 

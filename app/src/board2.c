@@ -348,11 +348,10 @@ static void handlePacket(Station *s, const Options *o, char *packet,
         return;
     }
     if (!strcmp(packet, "ABORT") && !value) {
-        if (!test) {
+        if (!test && s->count < MAX_TESTS) {
             test = newTest(s, id, peer);
-            if (!test) return;
             test->state = ABORTED;
-        } else if (test == s->active) {
+        } else if (test && test == s->active) {
             closeAcquisition(s);
             test->state = ABORTED;
         }

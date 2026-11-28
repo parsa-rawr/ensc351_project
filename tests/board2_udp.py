@@ -6,6 +6,7 @@ import signal
 import socket
 import subprocess
 import sys
+import time
 
 BOARD = ("127.0.0.1", 35102)
 
@@ -111,8 +112,12 @@ with station("normal") as client, socket.socket(socket.AF_INET, socket.SOCK_DGRA
     send(client, "ARM,early,PWM")
     expect(client, "ERROR,early,ABORTED")
 
+    armed_at = time.monotonic()
     arm(client, "rc-2", "RC")
     _, data = decode_result(client, "rc-2", "RC", "NONE")
+    # Simulated stimulus waits 200 ms, then drives high and low for 3.5 s each.
+    # RESULT makes the controller end the run, so it must wait through both phases.
+    assert time.monotonic() - armed_at >= 7.1, data
     for key in ("charge_tau_s", "discharge_tau_s"):
         assert abs(data[key] - 0.5) < 0.02, data
     send(client, "ACK,rc-2,RESULT")

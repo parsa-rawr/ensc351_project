@@ -10,6 +10,7 @@ static const char *const names[] = { "DIVIDER", "RC", "PWM" };
 static const double endpoint_tolerance = 0.10;
 static const double signal_floor = 0.08;
 static const double start_timeout = 3.0;
+static const double rc_phase_time_constants = 7.0;
 
 const char *Measurement_name(Measurement_kind kind)
 {
@@ -30,7 +31,7 @@ bool Measurement_kindFromName(const char *name, Measurement_kind *kind)
 void Measurement_begin(Measurement *m, Measurement_kind kind, double now)
 {
     *m = (Measurement){
-        .kind = kind, .start = now, .first_signal = NAN, .last_edge = NAN,
+        .kind = kind, .start = now, .first_signal = NAN, .last_edge = NAN, .fall_started = NAN,
         .charge_10 = NAN, .charge_60 = NAN, .discharge_85 = NAN, .discharge_35 = NAN,
     };
 }
@@ -78,21 +79,23 @@ static bool sampleRc(Measurement *m, const Measurement_expectations *e,
                      double time, double volts)
 {
     if (isnan(m->first_signal) && volts >= signal_floor) m->first_signal = time;
-    if (!m->falling) {
+    if (isnan(m->fall_started)) {
         m->peak = fmax(m->peak, volts);
         // Allow ADC noise while looking for the start of Board 3's falling phase.
-        m->falling = m->peak >= 0.20 && volts < m->peak - 0.06;
+        if (m->peak >= 0.20 && volts < m->peak - 0.06) m->fall_started = time;
     }
     recordCrossing(m, time, volts, e->supply_v * 0.10, true, &m->charge_10);
     recordCrossing(m, time, volts, e->supply_v * 0.60, true, &m->charge_60);
-    if (m->falling) {
+    if (!isnan(m->fall_started)) {
         recordCrossing(m, time, volts, m->peak * 0.85, false, &m->discharge_85);
         recordCrossing(m, time, volts, m->peak * 0.35, false, &m->discharge_35);
     }
     add(&m->volts, volts);
     if (isnan(m->first_signal)) return time - m->start >= start_timeout;
-    double duration = time - m->first_signal;
-    return (m->falling && volts <= endpoint_tolerance) || duration >= 15 * e->rc_tau_s;
+    // RESULT triggers the controller's ABORT. Give Board 3 its full low phase first.
+    if (!isnan(m->fall_started))
+        return time - m->fall_started >= rc_phase_time_constants * e->rc_tau_s;
+    return time - m->first_signal >= 15 * e->rc_tau_s;
 }
 
 static bool samplePwm(Measurement *m, const Measurement_expectations *e,
