@@ -176,3 +176,29 @@ checks numeric RC estimates, independent wrong-component expectations, injected
 faults, both loopback levels, invalid arguments, CSV contents/overwrite refusal,
 and SIGINT/SIGTERM. CTest runs this suite. See `docs/verification.md` for the
 recorded host results; physical results must be collected on the board.
+
+### Distributed controller (Board 1)
+
+The separate `circuit_controller` executable coordinates Board 2 measurements
+and Board 3 stimulus over UDP. It has no direct HAL dependency and can be built
+without hardware packages:
+
+```sh
+cmake -S . -B build-controller -DENABLE_HARDWARE=OFF -DBUILD_TESTING=ON
+cmake --build build-controller -j4
+ctest --test-dir build-controller --output-on-failure
+```
+
+Run it with the station addresses for the project network:
+
+```sh
+./build-controller/controller/circuit_controller --board2-ip BOARD2_IP \
+  --board3-ip BOARD3_IP
+```
+
+For localhost simulation, start `python3 controller/tools/mock_board.py --board 2`
+and `python3 controller/tools/mock_board.py --board 3` in separate terminals,
+then run `./build-controller/controller/circuit_controller`. The dashboard UDP
+interface binds only to localhost port 35100; the controller listens on UDP
+35101 and stations use 35102/35103. Full message formats, JSON fields, timing,
+cleanup, and mock fault options are documented in `docs/network-protocol.md`.

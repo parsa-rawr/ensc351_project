@@ -15,10 +15,16 @@ if(ENABLE_ASAN)
 endif()
 add_subdirectory(hal)
 add_subdirectory(app)
+add_subdirectory(controller)
 include(CTest)
 if(BUILD_TESTING)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     add_test(NAME diagnostic_scenarios
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.py"
                 "$<TARGET_FILE:board_diagnostics>")
+    add_test(NAME controller_scenarios
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/controller/tests/integration.py"
+                "$<TARGET_FILE:circuit_controller>"
+                "${CMAKE_CURRENT_SOURCE_DIR}/controller/tools/mock_board.py")
+    set_tests_properties(controller_scenarios PROPERTIES TIMEOUT 90)
 endif()
