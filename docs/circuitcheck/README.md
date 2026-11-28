@@ -7,103 +7,60 @@ fallback.
 
 ## Run it
 
-Use Node.js 18 or newer. No npm dependencies or build step are required. From
-the repo root on your laptop or Board 1:
+Use Node.js 18 or newer. Run this from the dashboard branch checkout **on
+Board 1**, alongside the controller:
 
 ```bash
-CONTROLLER_IP=192.168.1.50 node docs/circuitcheck/server.js
+CONTROLLER_IP=127.0.0.1 node docs/circuitcheck/server.js
 ```
 
-Replace the example IPv4 address with Board 1's address. When the dashboard
-bridge runs on Board 1 and the controller listens on loopback, use
-`CONTROLLER_IP=127.0.0.1`. Open **http://127.0.0.1:8080** from the machine
-running Node. If Node runs on Board 1, open an SSH tunnel from your laptop:
+The controller accepts dashboard traffic at `127.0.0.1:35100`. The HTTP
+server listens at `127.0.0.1:8080`. To use a browser on a separate laptop or VM,
+open an SSH tunnel (replace the example IP with Board 1's Wi-Fi IP):
 
 ```bash
-ssh -L 8080:127.0.0.1:8080 debian@192.168.1.50
+ssh -N -L 8080:127.0.0.1:8080 mosman@10.11.28.51
 ```
 
-The browser continues to use **http://127.0.0.1:8080**. Run one dashboard instance
-per controller. Override `HTTP_PORT`, `CONTROLLER_PORT`, or `DATA_DIR` when
-needed. The default data directory is `docs/circuitcheck/data/`. The bridge
-keeps the latest 100 completed runs. Reports include verdict, detected fault,
-measurements, units in the headers, and any received voltage trace.
+Leave the tunnel open and browse to **http://127.0.0.1:8080** on the machine
+running SSH. When testing through Board 1's USB link, use its USB IP from the
+computer physically connected to it. You can inspect the bridge locally on
+Board 1 with `curl http://127.0.0.1:8080/api/state`. No npm packages are needed.
+`HTTP_PORT`, `CONTROLLER_PORT`, and `DATA_DIR` are optional overrides. The
+default data directory is `docs/circuitcheck/data/`. The bridge keeps the
+latest 100 saved records with CSV exports.
 
-## Controller handoff: proposed dashboard protocol
+## Board 1 protocol
 
-**Person 1 needs to confirm and implement this interface.** The shared board
-protocol is unchanged. Board 1 uses UDP 35101 to coordinate Board 2 on 35102
-and Board 3 on 35103. Extend Board 1 to bind UDP **35100** for the browser
-bridge. Send replies from 35100 to the dashboard datagram's source IP and port.
-The dashboard uses an ephemeral UDP port and only accepts packets from its
-configured controller address and port.
+This dashboard uses the implemented
+[controller protocol](https://github.com/parsa-rawr/ensc351_project/blob/mohamad/controller/docs/network-protocol.md).
+Each UDP request receives a JSON reply.
 
-UDP packets are UTF-8, one message per datagram. IDs and nonces are positive
-32-bit signed integers. For a JSON field, split only at the first two commas.
-Use the same dashboard test ID when addressing Boards 2 and 3.
-
-| Direction | Message | Meaning |
-| --- | --- | --- |
-| Dashboard → 1 | `STATUS,<nonce>` | Request Board 1’s latest station states once per second. |
-| 1 → dashboard | `STATUS,<nonce>,{"measurement":true,"signal":true}` | Echo nonce and return Boolean station states derived from Board 1’s heartbeats. The reply proves Board 1 is reachable. |
-| Dashboard → 1 | `RUN,<id>,<type>,<fault>` | Start a coordinated test. Repeat requests use the same ID. |
-| 1 → dashboard | `ACK,<id>,RUN` | Controller accepted the request. Duplicate RUN requests must receive the same ACK without reissuing hardware commands. |
-| 1 → dashboard | `SAMPLE,<id>,<JSON>` | Optional live voltage and metric batch. Time is seconds from the start of the capture. |
-| 1 → dashboard | `RESULT,<id>,<JSON>` | Final Board 2 verdict and measurements with hardware activity finished. |
-| Dashboard → 1 | `ACK,<id>,RESULT` | Result persisted. Board 1 should retry delivery until ACK or a bounded deadline. |
-| Dashboard → 1 | `ABORT,<id>` | The controller cancels the run and commands safe shutdown. |
-| 1 → dashboard | `ACK,<id>,ABORT` | Cancellation completed and hardware is safe. Acknowledge repeated ABORT for an already stopped test. |
-| 1 → dashboard | `ERROR,<id>,<reason>` | Terminal error. Send after safe shutdown, or when the controller refused to start. |
-
-Allow one active test at a time. On RUN, the controller performs the agreed
-PREPARE → ARM → START sequence as applicable, waits for the board acknowledgements,
-and handles boards timing out or disconnecting. Board 2 should receive the
-test type and test ID without the requested fault, infer the fault from its
-measurements, and retain its RESULT until Board 1 sends the board-level ACK.
-Board 1 separately delivers the outcome to the dashboard. Board 3 owns its
-communication-loss watchdog. Browser or bridge shutdown cannot guarantee that a
-UDP stop packet arrives.
-
-Supported choices in the dashboard:
-
-- DIVIDER or RC: NONE, WRONG_VALUE.
-- PWM: NONE, WRONG_FREQ, NO_SIGNAL.
-
-Confirm which fault combinations Board 3 can physically produce before using
-them in the demo. The bridge retries RUN and ABORT with the same ID and waits
-up to 60 seconds for a running test before requesting ABORT. A missed ACK stays
-visible as an unconfirmed start or stop. If Board 1 stops replying for 3.5
-seconds, the dashboard marks it offline and the other stations unknown. Boards
-2 and 3 each show online or offline when a fresh status reply is available.
-
-### Measurement payloads
-
-Example messages below specify packet format. Values are illustrative.
-
-```text
-SAMPLE,101,{"metrics":{"voltage_v":2.07},"samples":[{"t_s":0.5,"v":2.07,"phase":"charge"}]}
-RESULT,101,{"status":"PASS","fault_class":"NONE","metrics":{"expected_tau_s":0.5,"charge_tau_s":0.502,"discharge_tau_s":0.497}}
-RESULT,102,{"status":"FAIL","fault_class":"WRONG_FREQ","metrics":{"expected_frequency_hz":20,"frequency_hz":11.9,"jitter_ms":0.21}}
-```
-
-`status` is required on RESULT. It must be PASS or FAIL. `fault_class` comes from
-Board 2 and is distinct from the requested fault. Optional fields include
-`message`, `metrics`, and `samples` on RESULT, and `metrics` and `samples` on
-SAMPLE. Supported keys:
-
-| Test | Metrics |
+| Request | Dashboard behavior |
 | --- | --- |
-| Divider | voltage_v, expected_voltage_v |
-| RC | voltage_v, expected_tau_s, charge_tau_s, discharge_tau_s |
-| PWM and optical sampling | frequency_hz, expected_frequency_hz, jitter_ms, duty_cycle_pct, light_v, voltage_v |
+| `STATUS` | Polls Board 1 for controller state and Board 2/3 connectivity. |
+| `RUN,<request_id>,<test_type>,<fault>` | Retries reuse the same request ID. The controller's returned string test ID identifies the run. |
+| `GET_RESULT,<test_id>` | Polls the controller's retained record, including progress, measurements, and cleanup acknowledgements. |
+| `ABORT,<test_id>` | Requests stop. Polling continues until the controller reports the final state. |
 
-Use one increasing elapsed time axis across RC phases. If the Milestone 2 CSV
-time resets in each phase, add the phase start offset to make times increasing
-across the full run. Optional `phase` is `prepare`, `charge`, or `discharge`.
-Use small sample batches (ideally below 1200 bytes) and keep RESULT compact.
-The bridge sorts early or out of order packets by timestamp, ignores duplicate
-timestamps, and accepts up to the latest 1800 points for the dashboard and CSV.
-UDP samples can be dropped. Retain the Board 2 capture for a complete trace.
+A `COMPLETED` run uses the measurement's PASS or FAIL. A controller `FAILED`
+run is an execution error even if Board 2 previously reported a PASS. The
+dashboard preserves that measurement and the two cleanup acknowledgements.
+A controller `ABORTED` run confirms safe cleanup. When the bridge sees a run
+created elsewhere, it can display or save it with the requested fault left
+blank, because the controller's status does not include that field.
+
+The bridge reads the
+[Board 2 result fields](https://github.com/parsa-rawr/ensc351_project/blob/person-2-measurement/docs/board2.md),
+including divider voltage, RC time constants, and PWM frequency and sampling
+jitter. Board 2's reported fault remains distinct from the requested fault.
+It shows a simulation label when the payload says `simulated: true`.
+
+The controller returns measurements as a result object. There is no sample
+stream in this protocol. The existing chart and CSV include a trace when Board
+2 supplies a `samples` array in its result. A sample uses `t_s` (elapsed
+seconds), `v` (volts), and optionally `phase`. The current Board 2 branch reports
+summary measurements, so the chart stays empty when only those are available.
 
 ## Start automatically with systemd
 
@@ -130,13 +87,12 @@ node --test docs/circuitcheck/integration.test.js
 
 The check uses a loopback mock controller and temporary history.
 
-1. Confirm 35100 messages with Person 1 before combining branches. Start
+1. Start
    the controller, both stations, and the dashboard. Confirm all three states
    turn online before running the divider.
 2. Run DIVIDER/NONE. Check that the browser result matches the measurement
    station and that a CSV downloads from run history.
-3. Run RC/NONE. Check that samples plot during capture, then compare both
-   time constants with Board 2 output. Run PWM/NONE next, then PWM/WRONG_FREQ
+3. Run RC/NONE. Compare both time constants with Board 2 output and check the trace if the result includes samples. Run PWM/NONE next, then PWM/WRONG_FREQ
    or PWM/NO_SIGNAL. Verify the two fault cases using real measurement data.
 4. Stop an active run. Disconnect a station during a separate run, observe
    the board status and terminal error, and verify that Board 3 reaches its

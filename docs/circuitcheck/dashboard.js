@@ -2,8 +2,8 @@
 
 const el = id => document.getElementById(id);
 const tests = {
-  DIVIDER: ['Resistor divider', 'Compare the measured divider voltage with the expected value.', ['NONE', 'WRONG_VALUE']],
-  RC: ['RC charge and discharge', 'Measure both time constants and review the voltage curve.', ['NONE', 'WRONG_VALUE']],
+  DIVIDER: ['Resistor divider', 'Compare the measured divider voltage with the expected value.', ['NONE', 'WRONG_VALUE', 'NO_SIGNAL']],
+  RC: ['RC charge and discharge', 'Measure both time constants and review the voltage curve.', ['NONE', 'WRONG_VALUE', 'NO_SIGNAL']],
   PWM: ['PWM verification', 'Measure frequency, duty cycle, and jitter at the measurement station.', ['NONE', 'WRONG_FREQ', 'NO_SIGNAL']],
 };
 const faults = { NONE: 'None', WRONG_VALUE: 'Wrong component value', WRONG_FREQ: 'Wrong frequency', NO_SIGNAL: 'No signal' };
@@ -12,6 +12,8 @@ const metrics = {
   charge_tau_s: ['Charge τ', 's'], discharge_tau_s: ['Discharge τ', 's'], expected_tau_s: ['Expected τ', 's'],
   frequency_hz: ['Frequency', 'Hz'], expected_frequency_hz: ['Expected frequency', 'Hz'],
   jitter_ms: ['Sampling jitter', 'ms'], duty_cycle_pct: ['Duty cycle', '%'], light_v: ['Light sensor voltage', 'V'],
+  measured_tau_s: ['Measured τ', 's'], min_v: ['Minimum', 'V'], max_v: ['Maximum', 'V'],
+  peak_v: ['Peak', 'V'], final_v: ['Final', 'V'], cycles: ['Cycles', ''],
 };
 const phases = { prepare: '#7c8a9d', charge: '#2758cf', discharge: '#0c897b' };
 let current = {};
@@ -58,6 +60,11 @@ function showResult() {
     (outcome === 'PASS' ? 'good' : ['FAIL', 'ERROR'].includes(outcome) ? 'bad' : '');
   el('run-id').textContent = run ? '#' + run.id + (selected ? ' · Saved run' : '') : '';
   const details = [];
+  if (run?.simulated === true) details.push('Simulated measurement');
+  if (run?.verdict === 'ERROR' && run.measurement_status) details.push('Measurement: ' + run.measurement_status);
+  for (const n of [2, 3]) {
+    if (run?.cleanup?.['board' + n] === 'unconfirmed') details.push('Board ' + n + ' stop unconfirmed');
+  }
   if (run?.fault_class) details.push('Detected fault: ' + (faults[run.fault_class] || run.fault_class));
   if (run?.message) details.push(run.message);
   el('classification').textContent = details.join(' · ') || (run ? tests[run.type][0] : 'Awaiting a test.');
@@ -67,7 +74,7 @@ function showResult() {
       const name = document.createElement('dt');
       const value = document.createElement('dd');
       name.textContent = label;
-      value.textContent = run.metrics[key].toLocaleString(undefined, { maximumFractionDigits: 4 }) + ' ' + unit;
+      value.textContent = run.metrics[key].toLocaleString(undefined, { maximumFractionDigits: 4 }) + (unit ? ' ' + unit : '');
       cell.append(name, value);
       return cell;
     }));
@@ -83,7 +90,7 @@ function drawGraph() {
   el('graph-empty').hidden = Boolean(points.length);
   el('graph-empty').textContent = run?.verdict
     ? 'No voltage samples were received for this run.'
-    : 'Live ADC samples appear when the controller forwards them.';
+    : 'The trace appears when the measurement result includes voltage samples.';
   el('phases').hidden = !points.some(p => p.phase);
   el('sample-count').textContent = points.length ? points.length + ' samples' : '';
   if (!points.length) return;
